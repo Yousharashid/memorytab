@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css'; // Import Tailwind styles
-import type { DailySummary, NormalizedItem } from '../../lib/summarizeDayLLM'; // Import types
+import type { MemoryEntry } from '../../lib/summarizeDayLLM'; // Import types
+
+// Type for the object stored in chrome.storage.local
+interface StoredDayData {
+    entries: MemoryEntry[];
+    lastUpdated: string;
+    error?: string | null;
+}
 
 // Function to get today's date as YYYY-MM-DD string
 function getTodayDateString(): string {
@@ -12,119 +19,104 @@ function getTodayDateString(): string {
   return `${year}-${month}-${day}`;
 }
 
-// Helper component for rendering a single link item
-function LinkItem({ item }: { item: NormalizedItem }) {
-  const faviconUrl = `https://www.google.com/s2/favicons?sz=32&domain_url=${encodeURIComponent(item.url)}`;
-
-  // Format timestamp (optional: consider locale)
-  const formatTime = (timestamp?: number): string => {
-      if (!timestamp) return '';
-      try {
-          return new Date(timestamp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-      } catch (e) {
-          return ''; // Handle potential errors
-      }
-  };
-  const visitTime = formatTime(item.lastVisitTime);
-
+// Helper component for rendering a single Memory Entry
+function MemoryItem({ entry }: { entry: MemoryEntry }) {
+  // Use a placeholder or logic to get a better icon later
+  const iconUrl = entry.sourceIcon || `https://www.google.com/s2/favicons?sz=32&domain_url=${entry.urls?.[0] || 'google.com'}`;
+  
   return (
-    <a
-      href={item.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-center p-2 bg-white rounded-md shadow hover:shadow-lg transition-shadow duration-150 ease-in-out space-x-2 justify-between"
-    >
-      {/* Group icon and title to handle truncation properly */}
-      <div className="flex items-center space-x-2 overflow-hidden">
-        <img src={faviconUrl} alt="" width="16" height="16" className="flex-shrink-0" />
-        <span className="text-sm text-gray-700 truncate" title={item.title}>{item.title}</span>
+    <div className={`flex items-start space-x-3 p-3 rounded-md ${entry.isDimmed ? 'opacity-60' : 'bg-white shadow-sm'}`}>
+      <img src={iconUrl} alt="" width="20" height="20" className="flex-shrink-0 mt-1 rounded-full" />
+      <div className="flex-grow">
+        <p className="text-sm text-gray-800">
+          <span className="font-medium text-gray-500 mr-2">{entry.time}</span>
+          {entry.summary}
+        </p>
+        {/* Optional: Display source URLs */} 
+        {entry.urls && entry.urls.length > 0 && (
+            <div className="mt-1 space-x-2">
+                {entry.urls.slice(0, 2).map(url => (
+                    <a href={url} target="_blank" rel="noopener noreferrer" key={url} className="text-xs text-blue-500 hover:underline truncate inline-block max-w-[150px]">
+                        {new URL(url).hostname}
+                    </a>
+                ))}
+            </div>
+        )}
       </div>
-      {/* Display formatted time if available */}
-      {visitTime && (
-          <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{visitTime}</span>
-      )}
-    </a>
+    </div>
   );
 }
 
 // Main New Tab component
 function NewTabApp() {
-  const [summaryData, setSummaryData] = useState<DailySummary | null>(null);
+  // State holds the entire object fetched from storage
+  const [storedData, setStoredData] = useState<StoredDayData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const [appError, setAppError] = useState<string | null>(null); // Separate state for fetch/render errors
   const todayKey = getTodayDateString();
 
   useEffect(() => {
-    async function fetchSummary() {
+    async function fetchDayData() {
       setLoading(true);
-      setError(null);
+      setAppError(null);
       try {
         const result = await chrome.storage.local.get(todayKey);
         if (result && result[todayKey]) {
-          setSummaryData(result[todayKey] as DailySummary);
+          // Validate fetched data structure if necessary
+          setStoredData(result[todayKey] as StoredDayData);
         } else {
-          // No data found for today yet
-          setSummaryData(null); 
+          setStoredData(null); // No data found for today
         }
       } catch (err) {
-        console.error("Error fetching summary from storage:", err);
-        setError("Failed to load summary data.");
-        setSummaryData(null);
+        console.error("Error fetching day data from storage:", err);
+        setAppError("Failed to load memory data.");
+        setStoredData(null);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchSummary();
+    fetchDayData();
 
-    // Optional: Set up a listener for storage changes to update UI automatically
+    // Listener for storage changes
     const storageListener = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
       if (areaName === 'local' && changes[todayKey]) {
         if (import.meta.env.DEV) {
-            console.log('Storage changed for today, reloading summary:', changes[todayKey].newValue);
+            console.log('Storage changed for today, reloading memory data:', changes[todayKey].newValue);
         }
-        setSummaryData(changes[todayKey].newValue as DailySummary);
+        setStoredData(changes[todayKey].newValue as StoredDayData);
       }
     };
     chrome.storage.onChanged.addListener(storageListener);
 
-    // Cleanup listener on component unmount
     return () => {
       chrome.storage.onChanged.removeListener(storageListener);
     };
 
-  }, [todayKey]); // Re-run if the date changes (e.g., after midnight)
+  }, [todayKey]);
 
   // --- Render Logic ---
   let content;
   if (loading) {
-    content = <p className="text-center text-gray-500">Loading your memory summary...</p>;
-  } else if (error) {
-    content = <p className="text-center text-red-500">Error: {error}</p>;
-  } else if (!summaryData || !summaryData.summaryText) {
-    content = <p className="text-center text-gray-500">No summary available yet for {todayKey}. Check back later or browse some more!</p>;
+    content = <p className="text-center text-gray-500 py-10">Loading your memory timeline...</p>;
+  } else if (appError) {
+    content = <p className="text-center text-red-500 py-10">Error: {appError}</p>;
+  } else if (!storedData || !storedData.entries || storedData.entries.length === 0) {
+    // Check for processing error stored in the object
+    const message = storedData?.error 
+        ? `Could not generate memories for ${todayKey}: ${storedData.error}`
+        : `No memories generated yet for ${todayKey}. Check back later or browse some more!`;
+    content = <p className="text-center text-gray-500 py-10">{message}</p>;
   } else {
+    // We have memory entries to display
     content = (
-      <div className="space-y-4">
-        {/* Summary Section */}
-        <div>
-          <h2 className="text-lg font-semibold text-gray-800 mb-2">Today's Summary:</h2>
-          <p className="text-gray-700 bg-gray-50 p-3 rounded-md shadow-sm whitespace-pre-wrap">{summaryData.summaryText}</p>
-          {summaryData.error && (
-              <p className="text-sm text-red-600 mt-2">Note: There was an error generating this summary ({summaryData.error}).</p>
-          )}
-        </div>
-
-        {/* Links Section */}
-        {summaryData.topLinks && summaryData.topLinks.length > 0 && (
-          <div>
-            <h2 className="text-lg font-semibold text-gray-800 mb-2">Top Links Visited:</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {summaryData.topLinks.map((link) => (
-                <LinkItem key={link.url} item={link} />
-              ))}
-            </div>
-          </div>
+      <div className="space-y-3">
+        {storedData.entries.map((entry) => (
+          <MemoryItem key={entry.id} entry={entry} />
+        ))}
+        {/* Display processing error if entries were generated but there was still an error */} 
+        {storedData.error && (
+            <p className="text-center text-sm text-red-600 mt-4">Note: There was an error during processing: {storedData.error}</p>
         )}
       </div>
     );
@@ -133,12 +125,18 @@ function NewTabApp() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4 md:p-8">
       <header className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 text-center">MemoryTab</h1>
-        <p className="text-center text-gray-600">Your Daily Browsing Summary for {todayKey}</p>
+        <h1 className="text-3xl font-bold text-gray-800 text-center">MemoryTab Timeline</h1>
+        <p className="text-center text-gray-600">Your Browsing Activity for {todayKey}</p>
       </header>
-      <main className="max-w-3xl mx-auto bg-white p-6 rounded-lg shadow-xl">
+      <main className="max-w-2xl mx-auto bg-gray-50 p-4 md:p-6 rounded-lg shadow-xl">
           {content}
       </main>
+      {/* Optional: Footer with last updated time */} 
+      {storedData?.lastUpdated && (
+        <footer className="text-center text-xs text-gray-400 mt-4">
+            Last updated: {new Date(storedData.lastUpdated).toLocaleString()}
+        </footer>
+      )}
     </div>
   );
 }

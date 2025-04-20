@@ -7,6 +7,9 @@ function Popup() {
   // State for button feedback
   const [triggerStatus, setTriggerStatus] = useState<string>('');
   const [isTriggering, setIsTriggering] = useState<boolean>(false);
+  // State for clear memory button feedback
+  const [clearStatus, setClearStatus] = useState<string>('');
+  const [isClearing, setIsClearing] = useState<boolean>(false);
 
   const handleManualTrigger = () => {
     setIsTriggering(true);
@@ -31,6 +34,28 @@ function Popup() {
     });
   };
 
+  // Handler for clearing memory
+  const handleClearMemory = () => {
+    setIsClearing(true);
+    setClearStatus('Clearing memory...');
+    console.log('Popup: Sending clearMemory message...');
+
+    chrome.runtime.sendMessage({ command: "clearMemory" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Popup: Error sending clearMemory message:', chrome.runtime.lastError.message);
+        setClearStatus(`Error: ${chrome.runtime.lastError.message || 'Could not connect to background.'}`);
+      } else if (response && response.status) {
+        console.log('Popup: Received clearMemory response:', response);
+        setClearStatus(response.status); 
+      } else {
+        console.log('Popup: Received unexpected or no response for clearMemory.');
+        setClearStatus('Background script did not respond.'); 
+      }
+      setIsClearing(false);
+      setTimeout(() => setClearStatus(''), 4000); // Clear status after delay
+    });
+  };
+
   return (
     <div className="p-4 bg-gray-100 text-gray-900 rounded-lg shadow-md space-y-3 w-64">
       <h1 className="text-lg font-bold text-center">🚀 MemoryTab Popup</h1>
@@ -51,6 +76,22 @@ function Popup() {
       {triggerStatus && (
           <p className={`text-xs text-center ${triggerStatus.startsWith('Error') ? 'text-red-600' : 'text-gray-600'}`}>
               {triggerStatus}
+          </p>
+      )}
+
+      {/* Clear Memory Button */}
+      <button 
+        onClick={handleClearMemory}
+        disabled={isClearing}
+        className="w-full bg-red-500 hover:bg-red-600 px-4 py-2 rounded text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {isClearing ? 'Clearing...' : 'Clear Stored Memory'}
+      </button>
+
+      {/* Clear Status Message Area */}
+      {clearStatus && (
+          <p className={`text-xs text-center ${clearStatus.startsWith('Error') ? 'text-red-600' : 'text-gray-600'}`}>
+              {clearStatus}
           </p>
       )}
 

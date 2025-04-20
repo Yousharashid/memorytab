@@ -1,5 +1,5 @@
 import { getApiKey } from './lib/getApiKey'; 
-import { summarizeDayLLM, DailySummary } from './lib/summarizeDayLLM'; 
+import { generateMemoryEntries, MemoryEntry } from './lib/summarizeDayLLM'; 
 
 // --- Restore ALARM_NAME --- 
 const ALARM_NAME = 'dailySummaryAlarm';
@@ -38,69 +38,69 @@ async function getDailyHistory(): Promise<chrome.history.HistoryItem[]> {
 
 // Restore main summary logic function
 async function performDailySummary() {
-  console.log("[DEBUG] Entering performDailySummary..."); // Log entry
+  console.log("[DEBUG] Entering performDailySummary...");
   const todayKey = getTodayDateString();
   if (import.meta.env.DEV) {
-    console.log(`[${new Date().toISOString()}] Running daily summary task for key: ${todayKey}`);
+    console.log(`[${new Date().toISOString()}] Running daily memory generation task for key: ${todayKey}`);
   }
 
-  try { // Add top-level try for safety
+  let memoryEntries: MemoryEntry[] = []; // Initialize
+  let processingError: string | null = null;
+
+  try {
     console.log("[DEBUG] Attempting to get API key...");
     const apiKey = await getApiKey();
     console.log(`[DEBUG] API key retrieved: ${apiKey ? 'Exists' : 'null'}`);
+    
     if (!apiKey) {
-      if (import.meta.env.DEV) {
-        console.warn('Background: No API key found. Skipping daily summary.');
-      }
-      return; // Exit if no API key
-    }
+      processingError = 'API key not set.';
+      console.warn('Background: No API key found. Skipping memory generation.');
+      // Store empty array with error? Or just don't store?
+      // Let's store an empty array for consistency in the new tab page
+    } else {
+        console.log("[DEBUG] Attempting to get history...");
+        const historyItems = await getDailyHistory();
+        console.log(`[DEBUG] History items retrieved: ${historyItems.length}`);
 
-    console.log("[DEBUG] Attempting to get history...");
-    const historyItems = await getDailyHistory();
-    console.log(`[DEBUG] History items retrieved: ${historyItems.length}`);
-    
-    if (historyItems.length === 0) {
-        const noHistorySummary: DailySummary = { summaryText: 'No browsing activity recorded for today.', itemCount: 0, topLinks: [] };
-        await chrome.storage.local.set({ [todayKey]: noHistorySummary });
-        if (import.meta.env.DEV) {
-            console.log(`Background: No history found. Stored empty state for ${todayKey}`);
+        if (historyItems.length === 0) {
+            console.log(`Background: No history found for ${todayKey}.`);
+            // Store empty array
+        } else {
+            console.log("[DEBUG] Attempting to call generateMemoryEntries...");
+            try {
+                memoryEntries = await generateMemoryEntries(historyItems, apiKey);
+                console.log(`[DEBUG] generateMemoryEntries call completed. ${memoryEntries.length} entries generated.`);
+            } catch (genError) {
+                console.error("[DEBUG] Error during generateMemoryEntries call:", genError);
+                processingError = (genError instanceof Error) ? genError.message : "Failed to generate memories.";
+                // Keep memoryEntries as empty array on generation error
+            }
         }
-        return;
     }
 
-    console.log("[DEBUG] Attempting to call summarizeDayLLM...");
-    // --- Restore summarizeDayLLM Call ---
-    const summaryResult: DailySummary = await summarizeDayLLM(historyItems, apiKey);
-    console.log("[DEBUG] summarizeDayLLM call completed.");
-    
-    console.log("[DEBUG] Attempting to save summary to storage...");
-    await chrome.storage.local.set({ [todayKey]: summaryResult });
-    console.log("[DEBUG] Summary saved to storage.");
-    // --- End Restore ---
-
-    if (import.meta.env.DEV) {
-      if (summaryResult.error) {
-        console.error('Background: Summary generation failed:', summaryResult.error);
-      } else {
-        console.log(`Background: Daily summary completed and stored for ${todayKey}.`, summaryResult);
-      }
-    }
-  } catch (error) {
-    console.error('[DEBUG] CRITICAL ERROR inside performDailySummary try block:', error);
-    // Optionally store an error state
-    const errorSummary: DailySummary = {
-        summaryText: '', 
-        itemCount: 0,
-        topLinks: [],
-        error: 'An unexpected CRITICAL error occurred in the background task.'
+    // Always attempt to save the result (even if empty or errored)
+    console.log("[DEBUG] Attempting to save memory entries to storage...");
+    const storageObject = { 
+        entries: memoryEntries, // Store the array
+        lastUpdated: new Date().toISOString(), // Add timestamp
+        error: processingError // Store potential processing error
     };
+    await chrome.storage.local.set({ [todayKey]: storageObject });
+    console.log("[DEBUG] Memory entries (or error state) saved to storage for key:", todayKey);
+
+  } catch (error) {
+    // Catch errors from getApiKey, getHistory, or storage.set
+    console.error('[DEBUG] CRITICAL ERROR inside performDailySummary try block:', error);
+    processingError = "A critical background error occurred.";
+    // Attempt to save error state
+    const errorObject = { entries: [], lastUpdated: new Date().toISOString(), error: processingError };
     try {
-        await chrome.storage.local.set({ [todayKey]: errorSummary });
+        await chrome.storage.local.set({ [todayKey]: errorObject });
     } catch (storageError) {
-        console.error("[DEBUG] Failed even to save error state to storage:", storageError);
+        console.error("[DEBUG] Failed even to save critical error state to storage:", storageError);
     }
   }
-  console.log("[DEBUG] Exiting performDailySummary."); // Log exit
+  console.log("[DEBUG] Exiting performDailySummary.");
 }
 
 // --- Event Listeners ---
@@ -150,18 +150,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         (async () => {
             try {
                 await performDailySummary();
-                // Send success response (optional)
                 sendResponse({ status: "Summary triggered successfully." }); 
             } catch (error) {
                 console.error("[DEBUG] Error during manually triggered summary:", error);
-                // Send error response (optional)
                 sendResponse({ status: "Error during summary trigger.", error: error });
             }
         })();
-        // Return true to indicate you wish to send a response asynchronously
-        return true; 
+        return true; // Keep channel open for async response
+
+    } else if (message.command === "clearMemory") {
+        console.log("[DEBUG] Clear memory command received.");
+        (async () => {
+            try {
+                await chrome.storage.local.clear();
+                console.log("[DEBUG] chrome.storage.local cleared successfully.");
+                sendResponse({ status: "Memory cleared successfully." });
+            } catch (error) {
+                console.error("[DEBUG] Error clearing local storage:", error);
+                sendResponse({ status: "Error clearing memory.", error: error });
+            }
+        })();
+        return true; // Keep channel open for async response
     }
-    // Handle other potential messages if needed
+    // Can add more else if blocks for other commands later
 });
 
 if (import.meta.env.DEV) {
