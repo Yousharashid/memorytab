@@ -2,22 +2,38 @@ import { getApiKey } from './lib/getApiKey';
 import { summarizeDayLLM, DailySummary } from './lib/summarizeDayLLM';
 
 const ALARM_NAME = 'dailySummaryAlarm';
-const SUMMARY_STORAGE_KEY = 'dailySummary';
+// const SUMMARY_STORAGE_KEY = 'dailySummary'; // Use date instead
 
 // --- Helper Functions ---
 
+// Function to get today's date as YYYY-MM-DD string
+function getTodayDateString(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+  const day = String(today.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 async function getDailyHistory(): Promise<chrome.history.HistoryItem[]> {
   const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
-  return chrome.history.search({ 
-    text: '', // All history
-    startTime: oneDayAgo,
-    maxResults: 1000 // Reasonable limit 
-  });
+  // Fetch history for the last 24 hours
+  try {
+      return await chrome.history.search({ 
+          text: '', // All history
+          startTime: oneDayAgo,
+          maxResults: 1000 // Reasonable limit 
+      });
+  } catch (error) {
+      console.error("Error fetching history:", error);
+      return []; // Return empty array on error
+  }
 }
 
 async function performDailySummary() {
+  const todayKey = getTodayDateString();
   if (import.meta.env.DEV) {
-    console.log(`[${new Date().toISOString()}] Running daily summary task...`);
+    console.log(`[${new Date().toISOString()}] Running daily summary task for key: ${todayKey}`);
   }
 
   const apiKey = await getApiKey();
@@ -25,8 +41,8 @@ async function performDailySummary() {
     if (import.meta.env.DEV) {
       console.warn('Background: No API key found. Skipping daily summary.');
     }
-    // Clear previous summary if key removed?
-    // await chrome.storage.local.remove(SUMMARY_STORAGE_KEY);
+    // Store a specific state indicating no API key for today?
+    // Or just leave it empty?
     return; // Exit if no API key
   }
 
@@ -36,44 +52,57 @@ async function performDailySummary() {
       console.log(`Background: Found ${historyItems.length} history items for summary.`);
     }
 
+    // Skip if no history, store empty state
+    if (historyItems.length === 0) {
+        const noHistorySummary: DailySummary = { summaryText: 'No browsing activity recorded for today.', itemCount: 0, topLinks: [] };
+        await chrome.storage.local.set({ [todayKey]: noHistorySummary });
+        if (import.meta.env.DEV) {
+            console.log(`Background: No history found. Stored empty state for ${todayKey}`);
+        }
+        return;
+    }
+
     const summaryResult: DailySummary = await summarizeDayLLM(historyItems, apiKey);
 
-    // Store the summary (or error) in local storage
-    await chrome.storage.local.set({ [SUMMARY_STORAGE_KEY]: summaryResult });
+    // Store the summary (or error) in local storage using date key
+    await chrome.storage.local.set({ [todayKey]: summaryResult });
 
     if (import.meta.env.DEV) {
       if (summaryResult.error) {
         console.error('Background: Summary generation failed:', summaryResult.error);
       } else {
-        console.log('Background: Daily summary completed and stored.', summaryResult);
+        console.log(`Background: Daily summary completed and stored for ${todayKey}.`, summaryResult);
       }
     }
   } catch (error) {
     console.error('Background: Unhandled error during daily summary:', error);
     // Optionally store an error state
-    await chrome.storage.local.set({
-      [SUMMARY_STORAGE_KEY]: {
+    const errorSummary: DailySummary = {
         summaryText: '', 
         itemCount: 0,
+        topLinks: [],
         error: 'An unexpected error occurred in the background task.'
-      } as DailySummary
-    });
+    };
+    await chrome.storage.local.set({ [todayKey]: errorSummary });
   }
 }
 
 // --- Event Listeners ---
 
-// On Install/Update: Set up the daily alarm
+// On Install/Update: Set up the alarm
 chrome.runtime.onInstalled.addListener((details) => {
   if (import.meta.env.DEV) {
     console.log('Extension installed or updated:', details);
   }
-  // Create alarm to run roughly every 24 hours
+  // Create alarm 
+  // For development, run more frequently (e.g., every 5 mins). Target is daily (1440 mins).
+  const periodInMinutes = import.meta.env.DEV ? 5 : 60 * 24; 
   chrome.alarms.create(ALARM_NAME, {
-    periodInMinutes: 60 * 24 // Run daily
+    // delayInMinutes: 1, // Optional: Delay first run
+    periodInMinutes: periodInMinutes 
   });
   if (import.meta.env.DEV) {
-    console.log('Daily summary alarm created.');
+    console.log(`Daily summary alarm created/updated. Running every ${periodInMinutes} minutes.`);
     // Optional: Run immediately on install for testing
     // performDailySummary(); 
   }
