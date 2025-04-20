@@ -1,106 +1,151 @@
-import { getApiKey } from './lib/getApiKey'; 
-import { generateMemoryEntries, MemoryEntry } from './lib/summarizeDayLLM'; 
+import { generateMemoryEntries, MemoryEntry, StoredDayData } from './lib/summarizeDayLLM'; 
 
-// --- Restore ALARM_NAME --- 
-const ALARM_NAME = 'dailySummaryAlarm';
+// --- Constants ---
+const DAILY_SUMMARY_ALARM_NAME = 'dailySummaryAlarm';
+const OFFSCREEN_DOCUMENT_PATH = 'src/pages/offscreen/index.html';
 
 // --- Helper Functions ---
 
-// Restore helper functions
+// --- Offscreen Document Management ---
+let creatingOffscreenDocument: Promise<void> | null = null; // Prevent race conditions
+
 // Function to get today's date as YYYY-MM-DD string
 function getTodayDateString(): string {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-  const day = String(today.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 }
 
-async function getDailyHistory(): Promise<chrome.history.HistoryItem[]> {
-  // Calculate start of today (00:00:00.000)
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  
-  // Fetch history from the start of today until now
-  try {
-      console.log(`[DEBUG] Fetching history starting from: ${todayStart.toISOString()}`);
-      return await chrome.history.search({ 
-          text: '', // All history
-          startTime: todayStart.getTime(), // Use start of day timestamp
-          // endTime: Date.now(), // Optional: Explicitly set end time to now
-          maxResults: 1000 // Reasonable limit 
-      });
-  } catch (error) {
-      console.error("Error fetching history:", error);
-      return []; // Return empty array on error
+async function hasOffscreenDocument(): Promise<boolean> {
+  // Check if the document is already open
+  const existingContexts = await chrome.runtime.getContexts({ 
+    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+    documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)] 
+  });
+  return existingContexts.length > 0;
+}
+
+async function setupOffscreenDocument(): Promise<boolean> {
+  if (await hasOffscreenDocument()) {
+    console.log("Offscreen document already exists.");
+    return true;
   }
+
+  // Avoid race conditions during creation
+  if (creatingOffscreenDocument) {
+    console.log("Offscreen document creation already in progress. Waiting...");
+    await creatingOffscreenDocument;
+    // Check again after waiting
+    return await hasOffscreenDocument(); 
+  }
+
+  console.log("Creating offscreen document...");
+  creatingOffscreenDocument = chrome.offscreen.createDocument({
+    url: OFFSCREEN_DOCUMENT_PATH,
+    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.LOCAL_STORAGE], 
+    justification: 'Perform long-running OpenAI API fetch request.',
+  });
+
+  let success = false;
+  try {
+    await creatingOffscreenDocument;
+    console.log("Offscreen document created successfully.");
+    success = true;
+  } catch (error: any) {
+    console.error("Error creating offscreen document:", error);
+    success = false; // Explicitly false on error
+  } finally {
+    creatingOffscreenDocument = null; // Reset the creation lock
+  }
+  return success;
 }
 
-// Restore main summary logic function
+// Close the offscreen document when the service worker becomes inactive (optional, but good practice)
+// Note: This listener might not always fire reliably before timeout.
+// chrome.runtime.onSuspend.addListener(() => { 
+//   chrome.offscreen.closeDocument().catch(e => console.error("Error closing offscreen doc on suspend:", e));
+// });
+
+// --- Main Summary Logic ---
 async function performDailySummary() {
-  console.log("[DEBUG] Entering performDailySummary...");
-  const todayKey = getTodayDateString();
-  if (import.meta.env.DEV) {
-    console.log(`[${new Date().toISOString()}] Running daily memory generation task for key: ${todayKey}`);
-  }
+    // ADDED: Get the correct date key for the current execution
+    const todayKey = getTodayDateString();
+    console.log(`Entering performDailySummary for key: ${todayKey}...`);
 
-  let memoryEntries: MemoryEntry[] = []; // Initialize
-  let processingError: string | null = null;
+    let apiKey = '';
+    let memoryEntries: MemoryEntry[] = [];
 
-  try {
-    console.log("[DEBUG] Attempting to get API key...");
-    const apiKey = await getApiKey();
-    console.log(`[DEBUG] API key retrieved: ${apiKey ? 'Exists' : 'null'}`);
-    
-    if (!apiKey) {
-      processingError = 'API key not set.';
-      console.warn('Background: No API key found. Skipping memory generation.');
-      // Store empty array with error? Or just don't store?
-      // Let's store an empty array for consistency in the new tab page
-    } else {
-        console.log("[DEBUG] Attempting to get history...");
-        const historyItems = await getDailyHistory();
-        console.log(`[DEBUG] History items retrieved: ${historyItems.length}`);
+    try {
+        // --- Ensure Offscreen Document Exists --- 
+        const offscreenReady = await setupOffscreenDocument();
+        if (!offscreenReady) {
+            console.error("Failed to setup offscreen document. Aborting summary.");
+            // Optionally save an error state specific to offscreen failure
+            throw new Error("Offscreen document setup failed."); // Throw to trigger general error handling
+        }
 
-        if (historyItems.length === 0) {
-            console.log(`Background: No history found for ${todayKey}.`);
-            // Store empty array
+        // --- 1. Get API Key ---
+        console.log("Attempting to get API key...");
+        const data = await chrome.storage.local.get('openaiApiKey');
+        apiKey = data.openaiApiKey;
+        if (!apiKey || !apiKey.startsWith("sk-")) {
+            throw new Error('Invalid API key found'); 
+        }
+        console.log("API key retrieved: Exists");
+
+        // --- 2. Fetch History ---
+        console.log("Attempting to get history...");
+        const endTime = new Date(); 
+        const startTime = new Date(endTime.getTime() - 24 * 60 * 60 * 1000);
+        console.log(`Fetching history starting from: ${startTime.toISOString()}`);
+        let historyItems = await chrome.history.search({ 
+            text: '', // Empty string matches all history
+            startTime: startTime.getTime(),
+            endTime: endTime.getTime(),
+            maxResults: 1000 // Get a decent number to process
+        });
+        console.log(`History items retrieved: ${historyItems.length}`);
+
+        // --- Filter out non-web pages BEFORE sending to LLM ---
+        const webHistoryItems = historyItems.filter(item => 
+            item.url && (item.url.startsWith('http://') || item.url.startsWith('https://'))
+        );
+        console.log(`Filtered web history items: ${webHistoryItems.length}`);
+
+        // --- 3. Generate Memories via Offscreen Document --- 
+        if (webHistoryItems.length > 0) {
+            console.log("Attempting to call generateMemoryEntries (via Offscreen)...");
+            // Call the refactored function (which now sends message to offscreen)
+            memoryEntries = await generateMemoryEntries(apiKey, webHistoryItems);
+            console.log(`generateMemoryEntries call completed. ${memoryEntries.length} entries generated.`);
         } else {
-            console.log("[DEBUG] Attempting to call generateMemoryEntries...");
-            try {
-                memoryEntries = await generateMemoryEntries(historyItems, apiKey);
-                console.log(`[DEBUG] generateMemoryEntries call completed. ${memoryEntries.length} entries generated.`);
-            } catch (genError) {
-                console.error("[DEBUG] Error during generateMemoryEntries call:", genError);
-                processingError = (genError instanceof Error) ? genError.message : "Failed to generate memories.";
-                // Keep memoryEntries as empty array on generation error
-            }
+            // UPDATED: Log with the correct todayKey
+            console.log(`No relevant web history found for ${todayKey}.`);
+        }
+
+        // --- 4. Save results ---
+        console.log("Attempting to save memory entries to storage...");
+        const dataToStore: StoredDayData = { entries: memoryEntries, lastUpdated: new Date().toISOString(), error: null };
+        // Use the correctly calculated todayKey for saving
+        await chrome.storage.local.set({ [todayKey]: dataToStore });
+        console.log(`Memory entries (or empty) saved to storage for key: ${todayKey}`);
+
+    } catch (error: any) {
+        console.error("Error during performDailySummary:", error);
+        // Save error state to storage so UI can display it
+        const errorData: StoredDayData = { entries: [], lastUpdated: new Date().toISOString(), error: error.message || 'Unknown error' };
+        try {
+            // Use the correctly calculated todayKey for saving error state
+            await chrome.storage.local.set({ [todayKey]: errorData });
+            console.log(`Error state saved to storage for key: ${todayKey}`);
+        } catch (saveError) {
+            console.error("Failed to save error state to storage:", saveError);
         }
     }
-
-    // Always attempt to save the result (even if empty or errored)
-    console.log("[DEBUG] Attempting to save memory entries to storage...");
-    const storageObject = { 
-        entries: memoryEntries, // Store the array
-        lastUpdated: new Date().toISOString(), // Add timestamp
-        error: processingError // Store potential processing error
-    };
-    await chrome.storage.local.set({ [todayKey]: storageObject });
-    console.log("[DEBUG] Memory entries (or error state) saved to storage for key:", todayKey);
-
-  } catch (error) {
-    // Catch errors from getApiKey, getHistory, or storage.set
-    console.error('[DEBUG] CRITICAL ERROR inside performDailySummary try block:', error);
-    processingError = "A critical background error occurred.";
-    // Attempt to save error state
-    const errorObject = { entries: [], lastUpdated: new Date().toISOString(), error: processingError };
-    try {
-        await chrome.storage.local.set({ [todayKey]: errorObject });
-    } catch (storageError) {
-        console.error("[DEBUG] Failed even to save critical error state to storage:", storageError);
-    }
-  }
-  console.log("[DEBUG] Exiting performDailySummary.");
+    // UPDATED: Log with the correct todayKey
+    console.log(`Exiting performDailySummary for key: ${todayKey}.`);
 }
 
 // --- Event Listeners ---
@@ -112,7 +157,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
   // --- Restore Alarm Creation --- 
   const periodInMinutes = import.meta.env.DEV ? 5 : 60 * 24; 
-  chrome.alarms.create(ALARM_NAME, {
+  chrome.alarms.create(DAILY_SUMMARY_ALARM_NAME, {
     periodInMinutes: periodInMinutes 
   });
   if (import.meta.env.DEV) {
@@ -135,7 +180,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     console.log('[DEBUG] Alarm triggered. Attempting to run summary execution.', alarm);
   }
   // --- Restore Alarm Execution Logic ---
-  if (alarm.name === ALARM_NAME) {
+  if (alarm.name === DAILY_SUMMARY_ALARM_NAME) {
     performDailySummary();
   }
   // --- End Restore ---

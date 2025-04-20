@@ -23,6 +23,7 @@ export default defineConfig({
         popup: 'src/pages/popup/index.html',
         options: 'src/pages/options/index.html',
         newtab: 'src/pages/newtab/index.html',
+        offscreen: 'src/pages/offscreen/index.html',
       },
     },
   },

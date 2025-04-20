@@ -3,3 +3,32 @@
 @tailwind utilities;
 
 /* New Tab Page Specific Styles */ 
+
+/* Add custom styles here */
+
+/* Custom scrollbar hiding utilities */
+.hide-scrollbar::-webkit-scrollbar {
+    display: none; /* For WebKit browsers */
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;  /* For IE and Edge */
+    scrollbar-width: none;  /* For Firefox */
+}
+
+/* CSS Mask for scroll fade effect */
+.fade-scroll-edges {
+    mask-image: linear-gradient(to bottom, 
+        transparent 0%, 
+        black 10%, /* Start fade in */ 
+        black 90%, /* End fade out */
+        transparent 100%
+    );
+    /* Add vendor prefixes for broader compatibility if needed */
+    -webkit-mask-image: linear-gradient(to bottom, 
+        transparent 0%, 
+        black 10%, 
+        black 90%, 
+        transparent 100%
+    );
+} 

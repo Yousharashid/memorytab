@@ -1,5 +1,6 @@
 import { defineManifest } from '@crxjs/vite-plugin'
-import pkg from './package.json'
+// Use default import for JSON
+import packageJson from "./package.json"
 
 // Define base CSP directives
 const baseCsp = {
@@ -29,16 +30,19 @@ const csp = {
   'extension_pages': cspString
 }
 
-export default defineManifest({
+const manifest = defineManifest({
   manifest_version: 3,
-  name: pkg.name,
-  version: pkg.version,
-  // Required permissions
+  name: packageJson.name,
+  version: packageJson.version,
+  // Required permissions - consolidated
   permissions: [
-    'storage',      // For storing API key and summaries
-    'alarms',       // For scheduling daily summary
-    'history',      // For accessing browsing history
-    // 'identity', // Add later for Google Auth
+    "tabs", 
+    "history", 
+    "storage", 
+    "alarms", 
+    "scripting", 
+    "activeTab", // Likely needed for popup interaction or future features
+    "offscreen" // Needed for OpenAI API calls
   ],
   // Define host permissions required
   host_permissions: [
@@ -52,27 +56,27 @@ export default defineManifest({
   // --- End Restore ---
   // Browser action popup
   action: {
-    default_icon: {
-      16: 'public/logo.png',
-      48: 'public/logo.png',
-      128: 'public/logo.png',
-    },
-    // Corrected path
-    default_popup: 'src/pages/popup/index.html',
+    default_popup: "src/pages/popup/index.html",
+    default_icon: "public/logo.png",
   },
   // Options page
-  options_page: 'src/pages/options/index.html',
+  options_page: "src/pages/options/index.html",
   // New Tab page override
   chrome_url_overrides: {
-    newtab: 'src/pages/newtab/index.html',
+    newtab: "src/pages/newtab/index.html",
   },
   // Content Security Policy
   content_security_policy: csp,
   // Remove web accessible resources for content script if not needed
-  // web_accessible_resources: [
-  //   {
-  //     resources: ['assets/*'],
-  //     matches: ['<all_urls>'],
-  //   },
-  // ],
+  web_accessible_resources: [
+    {
+      resources: [
+        // 'src/pages/offscreen/index.html', // Removed - HTML itself doesn't need to be web accessible
+        'globe-icon.svg' 
+      ],
+      matches: ["<all_urls>"],
+    },
+  ],
 })
+
+export default manifest;

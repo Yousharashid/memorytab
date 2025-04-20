@@ -2,21 +2,30 @@
 
 // Define the structure for a memory entry
 export interface MemoryEntry {
-  id: string; // Unique identifier (e.g., timestamp hash)
-  time: string; // Formatted time (e.g., "09:45am")
-  summary: string; // The LLM-generated summary for this moment
+  id: string;       // Unique identifier (e.g., UUID)
+  time: string;     // Short time label (e.g., "9:45am")
+  timestamp: number; // Numerical timestamp for sorting (e.g., Date.now())
+  summary: string;  // One-sentence summary of the activity
   sourceIcon?: string; // Optional: favicon URL or emoji
   isDimmed?: boolean; // Optional: UI hint
-  urls?: string[]; // Optional: Source URLs contributing to this memory
+  urls: string[];   // Associated URL(s), should ideally be just one
+}
+
+// Type for the object stored in chrome.storage.local for a given day
+export interface StoredDayData {
+    entries: MemoryEntry[];
+    lastUpdated: string;
+    error?: string | null;
 }
 
 // Helper to generate the prompt asking for structured JSON output for single-URL memories
 function generatePromptForSingleURLMemoryEntries(items: chrome.history.HistoryItem[]): string {
-  // Select relevant items and format for the prompt
+  // Select relevant items and format for the prompt, including timestamp
   const links = items
-    .filter(item => item.url && item.title) // Filter out items without url/title
-    .slice(0, 30) // Limit history input
-    .map((item, i) => `(${i + 1}) ${item.title} — ${item.url}`)
+    .filter(item => item.url && item.title && item.lastVisitTime) // Ensure timestamp exists
+    .slice(0, 50) 
+    // Include lastVisitTime in the formatted string
+    .map((item, i) => `(${i + 1}) Time:${item.lastVisitTime} Title:${item.title} URL:${item.url}`)
     .join("\n");
 
   // Check if there are any links to include
@@ -25,13 +34,13 @@ function generatePromptForSingleURLMemoryEntries(items: chrome.history.HistoryIt
   }
 
   // Construct the prompt using the new template
-  return `\nYou are a memory assistant. Given the list of websites a user visited today, generate a list of concise memory entries. Each memory entry should summarize the *main intent or activity* behind a single page visit.\n\nOnly generate 5 memory entries. Each must include:\n- A unique id (timestamp + short suffix)\n- A short time label (e.g. "3:45pm") derived from the visit time\n- A one-sentence summary\n- A single sourceIcon (relevant emoji is best)\n- Exactly one URL in the 'urls' array (the most relevant one for that summary)\n\nRespond ONLY with a valid JSON array like this, starting immediately with \`\`\`json and ending immediately with \`\`\`:\n\n\`\`\`json\n[\n  {\n    "id": "1682739845000_abc123",\n    "time": "3:45pm",\n    "summary": "Explored Supabase auth docs.",\n    "sourceIcon": "📘",\n    "urls": ["https://supabase.com/docs/guides/auth"]\n  }\n]\n\`\`\`\n\nEnsure the entire response is valid JSON. Do not include any text before or after the JSON block.\n\nHere's the browsing history:\n\n${links}\n  `.trim();
+  return `\nYou are a memory assistant. Given the list of websites a user visited today (with timestamps), generate a list of concise memory entries. Each memory entry should summarize the *main intent or activity* behind a single page visit.\n\nGenerate up to 16 memory entries. Each must include:\n- A unique id (timestamp + short suffix)\n- A short time label (e.g. "3:45pm") derived from the visit time\n- A numerical timestamp (the original milliseconds since epoch from the input Time: field)\n- A one-sentence summary\n- A single sourceIcon (relevant emoji is best)\n- Exactly one URL in the 'urls' array (the most relevant one for that summary)\n\nRespond ONLY with a valid JSON array like this, starting immediately with \`\`\`json and ending immediately with \`\`\`:\n\n\`\`\`json\n[\n  {\n    "id": "1682739845000_abc123",\n    "time": "3:45pm",\n    "timestamp": 1682739845000,\n    "summary": "Explored Supabase auth docs.",\n    "sourceIcon": "📘",\n    "urls": ["https://supabase.com/docs/guides/auth"]\n  }\n]\n\`\`\`\n\nEnsure the entire response is valid JSON. Do not include any text before or after the JSON block.\n\nHere's the browsing history:\n\n${links}\n  `.trim();
 }
 
-// Main function to generate memory entries using OpenAI
+// Main function to generate memory entries using the Offscreen Document
 export async function generateMemoryEntries(
-  historyItems: chrome.history.HistoryItem[],
-  apiKey: string | null | undefined
+  apiKey: string,
+  historyItems: chrome.history.HistoryItem[]
 ): Promise<MemoryEntry[]> {
 
   // 1. Check for API Key
@@ -56,93 +65,98 @@ export async function generateMemoryEntries(
       return [];
   }
 
-  // 4. Call OpenAI API, expecting JSON
+  // 4. Send message to Offscreen document and get content
+  let content: string;
   try {
     if (import.meta.env.DEV) {
-        console.log(`Memory Generator: Calling OpenAI...
-Prompt: ${prompt.substring(0, 300)}...`);
-    }
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo-0125", // Ensure model supports JSON mode if needed, or parse manually
-          messages: [
-            {
-              role: "system",
-              content: "You are an assistant that analyzes browsing history and generates a timeline of distinct activities as a JSON array. Follow the user's specified JSON structure precisely.",
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          temperature: 0.3, // Lower temperature for more focused, structured output
-          max_tokens: 500, // Increase tokens slightly for potential JSON structure
-          // response_format: { type: "json_object" }, // Use if model supports guaranteed JSON output
-        }),
-      });
-
-    if (!res.ok) {
-        const errorBody = await res.text();
-        console.error("OpenAI API Error Response:", res.status, res.statusText, errorBody);
-        throw new Error(`OpenAI error: ${res.status} ${res.statusText}. ${errorBody}`);
-    }
-
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content?.trim();
-
-    if (!content) {
-      throw new Error("OpenAI response content is empty.");
-    }
-
-    if (import.meta.env.DEV) {
-        console.log("Memory Generator: Raw OpenAI response content:", content);
+        console.log(`Memory Generator: Sending prompt to offscreen document...`);
     }
     
-    // Attempt to parse the JSON array from the response
-    try {
-      // Basic cleanup: Remove potential markdown code fences and trim whitespace
-      const cleanedContent = content.replace(/^```json\n?|\n?```$/g, '').trim();
-      
-      // Handle potential empty string after cleanup
-      if (!cleanedContent) {
-          throw new Error("Cleaned response content is empty.");
-      }
+    const response = await chrome.runtime.sendMessage({ 
+        type: 'callOpenAI', 
+        apiKey: apiKey, 
+        prompt: prompt 
+    });
 
-      const memoryEntries: MemoryEntry[] = JSON.parse(cleanedContent);
-      
-      // Basic validation (check if it's an array)
-      if (!Array.isArray(memoryEntries)) {
-          throw new Error("OpenAI response was not a valid JSON array after cleanup.");
-      }
-      
-      // Ensure each entry has exactly one URL as per the new prompt design
-      const validatedEntries = memoryEntries.map(entry => {
-          if (entry.urls && entry.urls.length > 0) {
-              // Keep only the first URL
-              return { ...entry, urls: [entry.urls[0]] }; 
-          } else {
-              // Handle entries that might have been returned without a URL (or empty array)
-              // Optionally filter these out or return them as is depending on strictness needed
-              return { ...entry, urls: [] }; // Ensure urls is always an array
-          }
-      }).filter(entry => entry.urls && entry.urls.length > 0); // Optionally filter out entries without a URL
-
-      console.log(`Memory Generator: Successfully parsed and validated ${validatedEntries.length} memory entries.`);
-      return validatedEntries; // Return the validated/cleaned entries
-    } catch (parseError) {
-        console.error("Memory Generator: Failed to parse OpenAI JSON response:", parseError);
-        console.error("Memory Generator: Received content:", content); // Log the problematic content
-        throw new Error(`Failed to parse OpenAI response as JSON array. ${parseError instanceof Error ? parseError.message : parseError}`);
+    if (import.meta.env.DEV) {
+        console.log("Memory Generator: Received response from offscreen:", response);
     }
 
-  } catch (error) {
-    console.error('Memory Generator: Error calling or processing OpenAI API:', error);
+    if (!response) {
+        // This might happen if the offscreen document was closed unexpectedly
+        throw new Error("No response received from offscreen document.");
+    }
+    if (!response.success) {
+        // Bubble up the error from the offscreen document
+        throw new Error(`Offscreen document error: ${response.error || 'Unknown error'}${response.details ? JSON.stringify(response.details) : ''}`);
+    }
+    if (!response.content) {
+        throw new Error("Offscreen document did not return content.");
+    }
+    content = response.content;
+
+  } catch (error: any) {
+    console.error('Memory Generator: Error sending message to or receiving response from offscreen:', error);
     // Re-throw error to be handled by the background script
     throw error; 
+  }
+
+  // 5. Parse and Validate the received content
+  try {
+    const cleanedText = content.replace(/^```json\n?|\n?```$/g, '').trim();
+
+    let memoryEntries: MemoryEntry[] = [];
+    if (!cleanedText) {
+      throw new Error("Received empty response content after cleaning.");
+    }
+
+    try {
+      memoryEntries = JSON.parse(cleanedText);
+    } catch (error: any) {
+      // Log the problematic text before throwing
+      console.error("Memory Generator: Failed to parse JSON. Problematic text:", cleanedText);
+      console.error("Memory Generator: Original parsing error:", error);
+      throw new Error(`Invalid JSON response content: ${error.message}`);
+    }
+
+    // Validate structure: Ensure it's an array
+    if (!Array.isArray(memoryEntries)) {
+        console.error("Memory Generator: Parsed response is not an array:", memoryEntries);
+        throw new Error("Invalid response structure: Expected an array.");
+    }
+
+    // Validate and sanitize individual entries
+    const validatedEntries = memoryEntries.filter(entry => {
+        if (!entry || typeof entry !== 'object') return false;
+        if (!Array.isArray(entry.urls) || entry.urls.length === 0 || typeof entry.urls[0] !== 'string') return false;
+        entry.urls = [entry.urls[0]];
+        try {
+            const url = new URL(entry.urls[0]);
+            if (!['http:', 'https:'].includes(url.protocol)) return false;
+        } catch (e) { return false; } 
+        
+        // Ensure core fields exist and have correct type
+        if (typeof entry.summary !== 'string' 
+            || typeof entry.time !== 'string' 
+            || typeof entry.timestamp !== 'number' // Changed: Check for number type
+            || typeof entry.id !== 'string' // Added: Check for string ID
+           ) { 
+            console.warn('Memory Generator: Filtering entry due to missing/invalid core fields (summary, time, timestamp, id):', entry);
+            return false;
+        }
+
+        // Defaults for optional fields
+        entry.sourceIcon = entry.sourceIcon || undefined;
+        entry.isDimmed = entry.isDimmed || false;     
+       
+        return true; 
+    });
+
+    console.log(`Memory Generator: Successfully parsed and validated ${validatedEntries.length} memory entries.`);
+    return validatedEntries;
+    
+  } catch (parseError: any) {
+      console.error('Memory Generator: Error parsing or validating content from offscreen:', parseError);
+      throw parseError;
   }
 } 

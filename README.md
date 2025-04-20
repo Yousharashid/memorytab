@@ -15,17 +15,17 @@ Built with React, TypeScript, Vite, CRXJS, and Tailwind CSS.
 This project uses a **Build-Only** workflow for development due to MV3 service worker limitations with HMR.
 
 1.  **Install Dependencies:**
-    ```bash
-    npm install
-    ```
+```bash
+npm install
+```
 
 2.  **Make Code Changes:**
     Edit files in the `src/` directory.
 
 3.  **Build the Extension:**
-    ```bash
-    npm run build
-    ```
+```bash
+npm run build
+```
     This command compiles the code and outputs the production-ready extension to the `dist/` directory.
 
 4.  **Load in Chrome:**
