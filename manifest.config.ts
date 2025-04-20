@@ -45,14 +45,9 @@ export default defineManifest({
   chrome_url_overrides: {
     newtab: 'src/pages/newtab/index.html',
   },
-  // Content script (if needed later, keep placeholder or remove)
-  content_scripts: [{
-    js: ['src/content/main.ts'], // Assuming TS, CRXJS handles build
-    matches: ['<all_urls>'], // Example: If you need content scripts
-  }],
   // Content Security Policy
   content_security_policy: csp,
-  // Web accessible resources (if needed for content scripts/iframes)
+  // Remove web accessible resources for content script if not needed
   // web_accessible_resources: [
   //   {
   //     resources: ['assets/*'],
