@@ -1,11 +1,12 @@
-import { getApiKey } from './lib/getApiKey';
-import { summarizeDayLLM, DailySummary } from './lib/summarizeDayLLM';
+import { getApiKey } from './lib/getApiKey'; 
+import { summarizeDayLLM, DailySummary } from './lib/summarizeDayLLM'; 
 
+// --- Restore ALARM_NAME --- 
 const ALARM_NAME = 'dailySummaryAlarm';
-// const SUMMARY_STORAGE_KEY = 'dailySummary'; // Use date instead
 
 // --- Helper Functions ---
 
+// Restore helper functions
 // Function to get today's date as YYYY-MM-DD string
 function getTodayDateString(): string {
   const today = new Date();
@@ -16,12 +17,17 @@ function getTodayDateString(): string {
 }
 
 async function getDailyHistory(): Promise<chrome.history.HistoryItem[]> {
-  const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
-  // Fetch history for the last 24 hours
+  // Calculate start of today (00:00:00.000)
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  
+  // Fetch history from the start of today until now
   try {
+      console.log(`[DEBUG] Fetching history starting from: ${todayStart.toISOString()}`);
       return await chrome.history.search({ 
           text: '', // All history
-          startTime: oneDayAgo,
+          startTime: todayStart.getTime(), // Use start of day timestamp
+          // endTime: Date.now(), // Optional: Explicitly set end time to now
           maxResults: 1000 // Reasonable limit 
       });
   } catch (error) {
@@ -30,29 +36,29 @@ async function getDailyHistory(): Promise<chrome.history.HistoryItem[]> {
   }
 }
 
+// Restore main summary logic function
 async function performDailySummary() {
+  console.log("[DEBUG] Entering performDailySummary..."); // Log entry
   const todayKey = getTodayDateString();
   if (import.meta.env.DEV) {
     console.log(`[${new Date().toISOString()}] Running daily summary task for key: ${todayKey}`);
   }
 
-  const apiKey = await getApiKey();
-  if (!apiKey) {
-    if (import.meta.env.DEV) {
-      console.warn('Background: No API key found. Skipping daily summary.');
+  try { // Add top-level try for safety
+    console.log("[DEBUG] Attempting to get API key...");
+    const apiKey = await getApiKey();
+    console.log(`[DEBUG] API key retrieved: ${apiKey ? 'Exists' : 'null'}`);
+    if (!apiKey) {
+      if (import.meta.env.DEV) {
+        console.warn('Background: No API key found. Skipping daily summary.');
+      }
+      return; // Exit if no API key
     }
-    // Store a specific state indicating no API key for today?
-    // Or just leave it empty?
-    return; // Exit if no API key
-  }
 
-  try {
+    console.log("[DEBUG] Attempting to get history...");
     const historyItems = await getDailyHistory();
-    if (import.meta.env.DEV) {
-      console.log(`Background: Found ${historyItems.length} history items for summary.`);
-    }
-
-    // Skip if no history, store empty state
+    console.log(`[DEBUG] History items retrieved: ${historyItems.length}`);
+    
     if (historyItems.length === 0) {
         const noHistorySummary: DailySummary = { summaryText: 'No browsing activity recorded for today.', itemCount: 0, topLinks: [] };
         await chrome.storage.local.set({ [todayKey]: noHistorySummary });
@@ -62,10 +68,15 @@ async function performDailySummary() {
         return;
     }
 
+    console.log("[DEBUG] Attempting to call summarizeDayLLM...");
+    // --- Restore summarizeDayLLM Call ---
     const summaryResult: DailySummary = await summarizeDayLLM(historyItems, apiKey);
-
-    // Store the summary (or error) in local storage using date key
+    console.log("[DEBUG] summarizeDayLLM call completed.");
+    
+    console.log("[DEBUG] Attempting to save summary to storage...");
     await chrome.storage.local.set({ [todayKey]: summaryResult });
+    console.log("[DEBUG] Summary saved to storage.");
+    // --- End Restore ---
 
     if (import.meta.env.DEV) {
       if (summaryResult.error) {
@@ -75,16 +86,21 @@ async function performDailySummary() {
       }
     }
   } catch (error) {
-    console.error('Background: Unhandled error during daily summary:', error);
+    console.error('[DEBUG] CRITICAL ERROR inside performDailySummary try block:', error);
     // Optionally store an error state
     const errorSummary: DailySummary = {
         summaryText: '', 
         itemCount: 0,
         topLinks: [],
-        error: 'An unexpected error occurred in the background task.'
+        error: 'An unexpected CRITICAL error occurred in the background task.'
     };
-    await chrome.storage.local.set({ [todayKey]: errorSummary });
+    try {
+        await chrome.storage.local.set({ [todayKey]: errorSummary });
+    } catch (storageError) {
+        console.error("[DEBUG] Failed even to save error state to storage:", storageError);
+    }
   }
+  console.log("[DEBUG] Exiting performDailySummary."); // Log exit
 }
 
 // --- Event Listeners ---
@@ -92,20 +108,17 @@ async function performDailySummary() {
 // On Install/Update: Set up the alarm
 chrome.runtime.onInstalled.addListener((details) => {
   if (import.meta.env.DEV) {
-    console.log('Extension installed or updated:', details);
+    console.log('[DEBUG] Extension installed/updated. Attempting alarm creation.', details);
   }
-  // Create alarm 
-  // For development, run more frequently (e.g., every 5 mins). Target is daily (1440 mins).
+  // --- Restore Alarm Creation --- 
   const periodInMinutes = import.meta.env.DEV ? 5 : 60 * 24; 
   chrome.alarms.create(ALARM_NAME, {
-    // delayInMinutes: 1, // Optional: Delay first run
     periodInMinutes: periodInMinutes 
   });
   if (import.meta.env.DEV) {
     console.log(`Daily summary alarm created/updated. Running every ${periodInMinutes} minutes.`);
-    // Optional: Run immediately on install for testing
-    // performDailySummary(); 
   }
+  // --- End Restore ---
 });
 
 // On Startup: (Optional) You could run summary on browser start if needed
@@ -118,11 +131,39 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 // On Alarm Trigger: Run the summary function
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (import.meta.env.DEV) {
+    console.log('[DEBUG] Alarm triggered. Attempting to run summary execution.', alarm);
+  }
+  // --- Restore Alarm Execution Logic ---
   if (alarm.name === ALARM_NAME) {
     performDailySummary();
   }
+  // --- End Restore ---
+});
+
+// Listener for manual trigger message
+// Mark sender as unused with underscore prefix
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.command === "triggerManualSummary") {
+        console.log("[DEBUG] Manual summary trigger received.");
+        // Use an IIFE to handle the async function call properly
+        (async () => {
+            try {
+                await performDailySummary();
+                // Send success response (optional)
+                sendResponse({ status: "Summary triggered successfully." }); 
+            } catch (error) {
+                console.error("[DEBUG] Error during manually triggered summary:", error);
+                // Send error response (optional)
+                sendResponse({ status: "Error during summary trigger.", error: error });
+            }
+        })();
+        // Return true to indicate you wish to send a response asynchronously
+        return true; 
+    }
+    // Handle other potential messages if needed
 });
 
 if (import.meta.env.DEV) {
-  console.log('Background script loaded.');
+  console.log('Background script loaded (fully restored).');
 } 

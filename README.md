@@ -1,50 +1,75 @@
-# React + Vite + CRXJS
+# MemoryTab Chrome Extension
 
-This template helps you quickly start developing Chrome extensions with React, TypeScript and Vite. It includes the CRXJS Vite plugin for seamless Chrome extension development.
+A Chrome extension that summarizes your daily browsing activity using AI.
+Built with React, TypeScript, Vite, CRXJS, and Tailwind CSS.
 
-## Features
+## Features (MVP)
 
-- React with TypeScript
-- TypeScript support
-- Vite build tool
-- CRXJS Vite plugin integration
-- Chrome extension manifest configuration
+-   Automatically summarizes browsing history from the current day using the OpenAI API.
+-   Displays the daily summary and top visited links on the New Tab page.
+-   Provides an Options page to securely save your OpenAI API key.
+-   Includes a Popup action to manually trigger the summary generation.
 
-## Quick Start
+## Development Workflow (Build-Only)
 
-1. Install dependencies:
+This project uses a **Build-Only** workflow for development due to MV3 service worker limitations with HMR.
 
-```bash
-npm install
-```
+1.  **Install Dependencies:**
+    ```bash
+    npm install
+    ```
 
-2. Start development server:
+2.  **Make Code Changes:**
+    Edit files in the `src/` directory.
 
-```bash
-npm run dev
-```
+3.  **Build the Extension:**
+    ```bash
+    npm run build
+    ```
+    This command compiles the code and outputs the production-ready extension to the `dist/` directory.
 
-3. Build for production:
+4.  **Load in Chrome:**
+    -   Open Chrome and navigate to `chrome://extensions`.
+    -   Enable "Developer mode" (top right).
+    -   If a previous version of MemoryTab is loaded, click "Remove".
+    -   Click "Load unpacked".
+    -   Select the `dist` directory inside your project folder (`memorytab/dist`).
 
-```bash
-npm run build
-```
+5.  **Test:**
+    -   Set your OpenAI API key via the extension's Options page.
+    -   Browse some websites.
+    -   Manually trigger the summary via the Popup action button or using the command below in the Service Worker console.
+    -   Open a New Tab to view the summary.
+
+## Manually Triggering Summary (for Testing)
+
+While testing the loaded extension:
+
+1.  Go to `chrome://extensions`.
+2.  Find the MemoryTab extension.
+3.  Click "Inspect service worker".
+4.  In the Console tab that opens, run:
+    ```javascript
+    chrome.runtime.sendMessage({ command: "triggerManualSummary" });
+    ```
 
 ## Project Structure
 
-- `src/popup/` - Extension popup UI
-- `src/content/` - Content scripts
-- `manifest.config.ts` - Chrome extension manifest configuration
+-   `dist/`: Built extension files (ignored by Git).
+-   `public/`: Static assets (e.g., extension icons).
+-   `src/`: Source code.
+    -   `lib/`: Core logic (API calls, storage helpers).
+    -   `pages/`: UI components for different extension views (Popup, New Tab, Options).
+    -   `background.ts`: Background service worker logic (alarms, history fetching, summary triggering).
+-   `manifest.config.ts`: Configuration file for generating `manifest.json` (via CRXJS).
+-   `vite.config.ts`: Vite build configuration.
+-   `tailwind.config.js`: Tailwind CSS configuration.
+-   `postcss.config.js`: PostCSS configuration (for Tailwind).
 
-## Documentation
+## Key Technologies
 
-- [React Documentation](https://reactjs.org/)
-- [Vite Documentation](https://vitejs.dev/)
-- [CRXJS Documentation](https://crxjs.dev/vite-plugin)
-
-## Chrome Extension Development Notes
-
-- Use `manifest.config.ts` to configure your extension
-- The CRXJS plugin automatically handles manifest generation
-- Content scripts should be placed in `src/content/`
-- Popup UI should be placed in `src/popup/`
+-   [CRXJS Vite Plugin](https://crxjs.dev/vite-plugin)
+-   [React](https://reactjs.org/)
+-   [TypeScript](https://www.typescriptlang.org/)
+-   [Vite](https://vitejs.dev/)
+-   [Tailwind CSS](https://tailwindcss.com/)

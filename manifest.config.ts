@@ -1,12 +1,32 @@
 import { defineManifest } from '@crxjs/vite-plugin'
 import pkg from './package.json'
 
-// Define a strict CSP
+// Define base CSP directives
+const baseCsp = {
+    'script-src': "'self'",
+    'style-src': "'self'", // Allow own stylesheets
+    'object-src': "'self'",
+    'connect-src': "'self' https://api.openai.com/ https://www.google.com/s2/favicons", // Allow self, OpenAI, Google Favicons
+};
+
+// Add development-specific directives
+if (process.env.NODE_ENV !== 'production') {
+    // Allow connections to Vite dev server & WebSockets
+    baseCsp['connect-src'] += ' http://localhost:5173 ws://localhost:5173';
+    // Allow inline styles (often needed for HMR or dev tools)
+    baseCsp['style-src'] += " 'unsafe-inline'"; 
+    // You might potentially need 'unsafe-eval' for script-src in some dev scenarios,
+    // but try to avoid it if possible.
+    // baseCsp['script-src'] += " 'unsafe-eval'"; 
+}
+
+// Construct the final CSP string
+const cspString = Object.entries(baseCsp)
+    .map(([key, value]) => `${key} ${value}`)
+    .join('; ');
+
 const csp = {
-  // Allow scripts, styles, and objects from the extension's own origin
-  'extension_pages': "script-src 'self'; style-src 'self'; object-src 'self';"
-  // Add 'connect-src https://api.openai.com' when needed
-  // Add 'style-src-elem 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com;' if using external fonts
+  'extension_pages': cspString
 }
 
 export default defineManifest({
@@ -20,15 +40,16 @@ export default defineManifest({
     'history',      // For accessing browsing history
     // 'identity', // Add later for Google Auth
   ],
-  // Define host permissions required (e.g., for OpenAI API)
+  // Define host permissions required
   host_permissions: [
-    // 'https://api.openai.com/*' // Add when OpenAI integration is implemented
+    "https://api.openai.com/" // Added for OpenAI API calls
   ],
-  // Background service worker
+  // --- Restore Background Script Entry ---
   background: {
-    service_worker: 'src/background.ts',
-    type: 'module', // Use ES module format
+    service_worker: "src/background.ts",
+    type: "module",
   },
+  // --- End Restore ---
   // Browser action popup
   action: {
     default_icon: {

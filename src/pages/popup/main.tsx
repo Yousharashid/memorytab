@@ -1,22 +1,63 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css'; // Import Tailwind styles
 
 // Define the Popup component directly
 function Popup() {
-  // You can add state or effects here if needed later
-  // const [data, setData] = React.useState(null);
+  // State for button feedback
+  const [triggerStatus, setTriggerStatus] = useState<string>('');
+  const [isTriggering, setIsTriggering] = useState<boolean>(false);
+
+  const handleManualTrigger = () => {
+    setIsTriggering(true);
+    setTriggerStatus('Triggering summary...');
+    console.log('Popup: Sending triggerManualSummary message...');
+
+    chrome.runtime.sendMessage({ command: "triggerManualSummary" }, (response) => {
+      if (chrome.runtime.lastError) {
+        // Handle errors like the background script not being available
+        console.error('Popup: Error sending message:', chrome.runtime.lastError.message);
+        setTriggerStatus(`Error: ${chrome.runtime.lastError.message || 'Could not connect to background script.'}`);
+      } else if (response && response.status) {
+        console.log('Popup: Received response:', response);
+        setTriggerStatus(response.status); // Display status from background
+      } else {
+          console.log('Popup: Received unexpected or no response.');
+        setTriggerStatus('Background script did not respond.'); 
+      }
+      setIsTriggering(false);
+      // Optional: Clear status after a delay
+      setTimeout(() => setTriggerStatus(''), 4000);
+    });
+  };
 
   return (
     <div className="p-4 bg-gray-100 text-gray-900 rounded-lg shadow-md space-y-3 w-64">
       <h1 className="text-lg font-bold text-center">🚀 MemoryTab Popup</h1>
       <p className="text-sm text-center">
-        This is the streamlined popup UI.
+        Control your daily summary.
       </p>
-      {/* Add more UI elements here */}
-      <button className="w-full bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded text-white text-sm">
-        Placeholder Action
+      
+      {/* Manual Trigger Button */}
+      <button 
+        onClick={handleManualTrigger}
+        disabled={isTriggering} // Disable while triggering
+        className="w-full bg-green-500 hover:bg-green-600 px-4 py-2 rounded text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {isTriggering ? 'Processing...' : 'Trigger Summary Manually'}
       </button>
+      
+      {/* Status Message Area */}
+      {triggerStatus && (
+          <p className={`text-xs text-center ${triggerStatus.startsWith('Error') ? 'text-red-600' : 'text-gray-600'}`}>
+              {triggerStatus}
+          </p>
+      )}
+
+      {/* Original Placeholder Button (can remove or repurpose) */}
+      {/* <button className="w-full bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded text-white text-sm"> */}
+      {/*   Placeholder Action */}
+      {/* </button> */}
     </div>
   );
 }

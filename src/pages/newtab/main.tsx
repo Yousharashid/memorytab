@@ -15,15 +15,34 @@ function getTodayDateString(): string {
 // Helper component for rendering a single link item
 function LinkItem({ item }: { item: NormalizedItem }) {
   const faviconUrl = `https://www.google.com/s2/favicons?sz=32&domain_url=${encodeURIComponent(item.url)}`;
+
+  // Format timestamp (optional: consider locale)
+  const formatTime = (timestamp?: number): string => {
+      if (!timestamp) return '';
+      try {
+          return new Date(timestamp).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      } catch (e) {
+          return ''; // Handle potential errors
+      }
+  };
+  const visitTime = formatTime(item.lastVisitTime);
+
   return (
-    <a 
-      href={item.url} 
-      target="_blank" 
+    <a
+      href={item.url}
+      target="_blank"
       rel="noopener noreferrer"
-      className="flex items-center p-2 bg-white rounded-md shadow hover:shadow-lg transition-shadow duration-150 ease-in-out space-x-2"
+      className="flex items-center p-2 bg-white rounded-md shadow hover:shadow-lg transition-shadow duration-150 ease-in-out space-x-2 justify-between"
     >
-      <img src={faviconUrl} alt="" width="16" height="16" className="flex-shrink-0" />
-      <span className="text-sm text-gray-700 truncate" title={item.title}>{item.title}</span>
+      {/* Group icon and title to handle truncation properly */}
+      <div className="flex items-center space-x-2 overflow-hidden">
+        <img src={faviconUrl} alt="" width="16" height="16" className="flex-shrink-0" />
+        <span className="text-sm text-gray-700 truncate" title={item.title}>{item.title}</span>
+      </div>
+      {/* Display formatted time if available */}
+      {visitTime && (
+          <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{visitTime}</span>
+      )}
     </a>
   );
 }
