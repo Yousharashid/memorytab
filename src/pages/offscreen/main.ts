@@ -15,7 +15,7 @@ async function callOpenAIAPI(apiKey: string, prompt: string): Promise<any> {
                 messages: [
                     {
                         role: "system",
-                        content: "You are an assistant that analyzes browsing history and generates a timeline of distinct activities as a JSON array. Follow the user's specified JSON structure precisely.",
+                        content: "You are an assistant that analyzes browsing history and generates a JSON object containing only 'summary' and 'tags'. Follow the user's specified JSON structure precisely.",
                     },
                     {
                         role: "user",
@@ -23,7 +23,7 @@ async function callOpenAIAPI(apiKey: string, prompt: string): Promise<any> {
                     },
                 ],
                 temperature: 0.3,
-                max_tokens: 1500,
+                max_tokens: 2500,
                 // response_format: { type: "json_object" }, // Consider adding if needed
             }),
         });

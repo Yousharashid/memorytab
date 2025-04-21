@@ -1,4 +1,5 @@
-import { generateMemoryEntries, MemoryEntry, StoredDayData } from './lib/summarizeDayLLM'; 
+import { generateMemoryEntries, StoredDayData } from './lib/summarizeDayLLM'; 
+import type { MemoryEntry } from './types';
 
 // --- Constants ---
 const DAILY_SUMMARY_ALARM_NAME = 'dailySummaryAlarm';

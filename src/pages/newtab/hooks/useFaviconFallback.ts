@@ -14,18 +14,23 @@ export function useFaviconFallback(domainOrUrl?: string) {
 
     // --- Memoized calculation of domain and initial source --- 
     const { domain, initialSrc } = useMemo(() => {
-        let calculatedDomain = '';
+        let calculatedDomain: string | undefined = undefined;
         try {
             if (domainOrUrl && domainOrUrl.includes('://')) {
-                calculatedDomain = new URL(domainOrUrl).hostname.replace(/^www\./, '');
-            } else if (domainOrUrl) {
-                calculatedDomain = domainOrUrl; // Assume it's already a domain
+                calculatedDomain = new URL(domainOrUrl).hostname;
             }
         } catch (e) {
-             console.warn('useFaviconFallback: Failed to parse domain from', domainOrUrl);
+             console.warn("useFaviconFallback: Failed to parse URL", domainOrUrl, e);
+             calculatedDomain = undefined; // Ensure it's undefined on error
         }
-        const calculatedInitialSrc = getFaviconUrl(calculatedDomain || domainOrUrl); 
-        return { domain: calculatedDomain, initialSrc: calculatedInitialSrc };
+
+        // Determine the final domain string to use (prefer parsed hostname)
+        const finalDomain = calculatedDomain || domainOrUrl;
+
+        // Only call getFaviconUrl if we have a valid string
+        const calculatedInitialSrc = finalDomain ? getFaviconUrl(finalDomain) : './globe-icon.svg';
+
+        return { domain: finalDomain, initialSrc: calculatedInitialSrc };
     }, [domainOrUrl]);
 
     // --- Effect to reset src and attempts when the input URL changes --- 

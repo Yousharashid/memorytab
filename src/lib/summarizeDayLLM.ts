@@ -1,47 +1,91 @@
 // src/lib/summarizeDayLLM.ts
 
-// Define the structure for a memory entry
-export interface MemoryEntry {
-  id: string;       // Unique identifier (e.g., UUID)
-  time: string;     // Short time label (e.g., "9:45am")
-  timestamp: number; // Numerical timestamp for sorting (e.g., Date.now())
-  summary: string;  // One-sentence summary of the activity
-  sourceIcon?: string; // Optional: favicon URL or emoji
-  isDimmed?: boolean; // Optional: UI hint
-  urls: string[];   // Associated URL(s), should ideally be just one
-}
+// IMPORT NEW TYPE
+import type { MemoryEntry } from '../types';
 
 // Type for the object stored in chrome.storage.local for a given day
 export interface StoredDayData {
-    entries: MemoryEntry[];
+    entries: MemoryEntry[]; // Use the new type
     lastUpdated: string;
     error?: string | null;
 }
 
-// Helper to generate the prompt asking for structured JSON output for single-URL memories
-function generatePromptForSingleURLMemoryEntries(items: chrome.history.HistoryItem[]): string {
-  // Select relevant items and format for the prompt, including timestamp
-  const links = items
-    .filter(item => item.url && item.title && item.lastVisitTime) // Ensure timestamp exists
-    .slice(0, 50) 
-    // Include lastVisitTime in the formatted string
-    .map((item, i) => `(${i + 1}) Time:${item.lastVisitTime} Title:${item.title} URL:${item.url}`)
-    .join("\n");
+// Helper to sanitize text input for prompts
+function sanitizeText(input: string): string {
+  // Handle potential null/undefined input gracefully
+  if (!input) {
+    return '';
+  }
+  return input
+    .replace(/[`{}[\]<>]/g, '') // Remove special formatting characters
+    .replace(/[\"']/g, '')       // Strip quotes
+    .replace(/[\\x00-\\x1F\\x7F]/g, '') // Control characters (ensure backslash is escaped)
+    .slice(0, 200);             // Truncate to avoid overlong titles
+}
 
-  // Check if there are any links to include
-  if (!links) {
-      return "No relevant browsing history found to generate memories."; // Or handle appropriately
+// NEW Few-Shot Prompt Generation Function (Reinforced)
+export function generatePromptForSingleURLMemoryEntries(items: chrome.history.HistoryItem[]): string {
+  const examples = `
+You are a memory summarizer. Based on a list of visited links, return ONLY a JSON object containing a concise 'summary' of the user's main activity and an array of relevant 'tags'.
+
+IMPORTANT: 
+- ONLY return the JSON object.
+- DO NOT include fields like 'id', 'time', 'timestamp', 'sourceIcon', or 'urls' in the JSON.
+- The entire response must be ONLY the JSON object, wrapped in \`\`\`json ... \`\`\`.
+
+### Example 1
+Links:
+- Visited GitHub project page (https://github.com/user/project)
+- Searched Stack Overflow for errors (https://stackoverflow.com/questions/67890)
+
+Memory:
+\`\`\`json
+{
+  "summary": "Worked on a coding project and debugged issues using StackOverflow.",
+  "tags": ["programming", "debugging"]
+}
+\`\`\`
+
+### Example 2
+Links:
+- Watched music video (https://youtube.com/watch?v=xyz)
+- Played song on Spotify (https://open.spotify.com/track/abc)
+
+Memory:
+\`\`\`json
+{
+  "summary": "Listened to music and watched a YouTube video for entertainment.",
+  "tags": ["entertainment", "relaxation"]
+}
+\`\`\`
+
+### Your Turn
+Links:
+`.trim();
+
+  // Filter for items with title and URL, then sanitize and format
+  const links = items
+    .filter(item => item.title && item.url) // Ensure title and url exist
+    .slice(0, 50) // Limit the number of items processed
+    .map((item) => {
+      const safeTitle = sanitizeText(item.title!); 
+      const safeUrl = sanitizeText(item.url!); 
+      return `- ${safeTitle} (${safeUrl})`;
+    });
+
+  if (links.length === 0) {
+    return "No processable browsing history found."; 
   }
 
-  // Construct the prompt using the new template
-  return `\nYou are a memory assistant. Given the list of websites a user visited today (with timestamps), generate a list of concise memory entries. Each memory entry should summarize the *main intent or activity* behind a single page visit.\n\nGenerate up to 16 memory entries. Each must include:\n- A unique id (timestamp + short suffix)\n- A short time label (e.g. "3:45pm") derived from the visit time\n- A numerical timestamp (the original milliseconds since epoch from the input Time: field)\n- A one-sentence summary\n- A single sourceIcon (relevant emoji is best)\n- Exactly one URL in the 'urls' array (the most relevant one for that summary)\n\nRespond ONLY with a valid JSON array like this, starting immediately with \`\`\`json and ending immediately with \`\`\`:\n\n\`\`\`json\n[\n  {\n    "id": "1682739845000_abc123",\n    "time": "3:45pm",\n    "timestamp": 1682739845000,\n    "summary": "Explored Supabase auth docs.",\n    "sourceIcon": "📘",\n    "urls": ["https://supabase.com/docs/guides/auth"]\n  }\n]\n\`\`\`\n\nEnsure the entire response is valid JSON. Do not include any text before or after the JSON block.\n\nHere's the browsing history:\n\n${links}\n  `.trim();
+  return `${examples}\n${links.join('\n')}\n\nMemory:\n\`\`\`json`;
 }
 
 // Main function to generate memory entries using the Offscreen Document
+// Update the return type to use the imported MemoryEntry
 export async function generateMemoryEntries(
   apiKey: string,
   historyItems: chrome.history.HistoryItem[]
-): Promise<MemoryEntry[]> {
+): Promise<MemoryEntry[]> { // Updated return type
 
   // 1. Check for API Key
   if (!apiKey || !apiKey.startsWith("sk-")) {
@@ -60,7 +104,7 @@ export async function generateMemoryEntries(
   const prompt = generatePromptForSingleURLMemoryEntries(historyItems);
   
   // Handle case where prompt generation might indicate no data
-  if (prompt === "No relevant browsing history found to generate memories.") {
+  if (prompt === "No processable browsing history found.") {
       console.log('generateMemoryEntries: No relevant history items for prompt generation.');
       return [];
   }
@@ -83,11 +127,9 @@ export async function generateMemoryEntries(
     }
 
     if (!response) {
-        // This might happen if the offscreen document was closed unexpectedly
         throw new Error("No response received from offscreen document.");
     }
     if (!response.success) {
-        // Bubble up the error from the offscreen document
         throw new Error(`Offscreen document error: ${response.error || 'Unknown error'}${response.details ? JSON.stringify(response.details) : ''}`);
     }
     if (!response.content) {
@@ -97,66 +139,57 @@ export async function generateMemoryEntries(
 
   } catch (error: any) {
     console.error('Memory Generator: Error sending message to or receiving response from offscreen:', error);
-    // Re-throw error to be handled by the background script
     throw error; 
   }
 
-  // 5. Parse and Validate the received content
+  // 5. Parse and Validate the received content using the new strategy
   try {
+    // Clean the raw content received from the LLM
     const cleanedText = content.replace(/^```json\n?|\n?```$/g, '').trim();
-
-    let memoryEntries: MemoryEntry[] = [];
     if (!cleanedText) {
-      throw new Error("Received empty response content after cleaning.");
+        throw new Error("Received empty response content after cleaning.");
     }
 
-    try {
-      memoryEntries = JSON.parse(cleanedText);
-    } catch (error: any) {
-      // Log the problematic text before throwing
-      console.error("Memory Generator: Failed to parse JSON. Problematic text:", cleanedText);
-      console.error("Memory Generator: Original parsing error:", error);
-      throw new Error(`Invalid JSON response content: ${error.message}`);
+    // Parse the JSON
+    const parsed = JSON.parse(cleanedText);
+
+    // Ensure it's an array (as requested in the prompt examples)
+    if (!Array.isArray(parsed)) {
+        // If the prompt explicitly asks for an array, treat non-array as error
+        console.error("Memory Generator: Expected an array from LLM, received:", parsed);
+        throw new Error("Invalid response structure: Expected a JSON array.");
+        // If a single object response is sometimes acceptable, you might wrap it:
+        // parsed = [parsed]; 
     }
 
-    // Validate structure: Ensure it's an array
-    if (!Array.isArray(memoryEntries)) {
-        console.error("Memory Generator: Parsed response is not an array:", memoryEntries);
-        throw new Error("Invalid response structure: Expected an array.");
-    }
+    // Validate each entry using map, throwing on the first invalid entry
+    const validatedEntries: MemoryEntry[] = parsed.map((entry: any, index: number) => {
+      // Validate the structure and types of each entry
+      if (
+        !entry || typeof entry !== 'object' || // Check if entry is a valid object
+        typeof entry.summary !== 'string' || entry.summary.trim() === '' || // Summary must be a non-empty string
+        !Array.isArray(entry.tags) || // Tags must be an array
+        !entry.tags.every((tag: any) => typeof tag === 'string') // Each tag must be a string
+      ) {
+        console.error(`Memory Generator: Invalid entry format found at index ${index}:`, entry);
+        throw new Error(`Invalid entry format at index ${index}. Entry: ${JSON.stringify(entry)}`);
+      }
 
-    // Validate and sanitize individual entries
-    const validatedEntries = memoryEntries.filter(entry => {
-        if (!entry || typeof entry !== 'object') return false;
-        if (!Array.isArray(entry.urls) || entry.urls.length === 0 || typeof entry.urls[0] !== 'string') return false;
-        entry.urls = [entry.urls[0]];
-        try {
-            const url = new URL(entry.urls[0]);
-            if (!['http:', 'https:'].includes(url.protocol)) return false;
-        } catch (e) { return false; } 
-        
-        // Ensure core fields exist and have correct type
-        if (typeof entry.summary !== 'string' 
-            || typeof entry.time !== 'string' 
-            || typeof entry.timestamp !== 'number' // Changed: Check for number type
-            || typeof entry.id !== 'string' // Added: Check for string ID
-           ) { 
-            console.warn('Memory Generator: Filtering entry due to missing/invalid core fields (summary, time, timestamp, id):', entry);
-            return false;
-        }
-
-        // Defaults for optional fields
-        entry.sourceIcon = entry.sourceIcon || undefined;
-        entry.isDimmed = entry.isDimmed || false;     
-       
-        return true; 
+      // Return the validated and trimmed entry
+      return {
+        summary: entry.summary.trim(),
+        // Also trim tags and filter out any empty strings resulting from trimming
+        tags: entry.tags.map((t: string) => t.trim()).filter(Boolean) 
+      };
     });
 
     console.log(`Memory Generator: Successfully parsed and validated ${validatedEntries.length} memory entries.`);
     return validatedEntries;
     
-  } catch (parseError: any) {
-      console.error('Memory Generator: Error parsing or validating content from offscreen:', parseError);
-      throw parseError;
+  } catch (err: any) { // Catch parsing/validation errors specifically
+    console.error("Memory Generator: Failed to parse or validate memory entries:", err);
+    // Re-throw the error to be handled by the calling function (performDailySummary)
+    // This ensures the error state is saved correctly in storage.
+    throw err; 
   }
 } 

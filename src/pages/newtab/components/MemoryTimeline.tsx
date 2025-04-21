@@ -1,5 +1,6 @@
-import type { MemoryEntry } from '../../../lib/summarizeDayLLM';
-import { MemoryCard } from './MemoryCard';
+// import React from 'react'; // Removed unused import
+import type { MemoryEntry } from '../../../types';
+import MemoryCard from './MemoryCard';
 
 // REMOVED Opacity Configuration
 
@@ -9,26 +10,30 @@ interface MemoryTimelineProps {
 }
 
 export function MemoryTimeline({ entries, error }: MemoryTimelineProps) {
-  return (
-    <div className="space-y-4 flex-grow overflow-y-auto hide-scrollbar p-12 fade-scroll-edges">
-      {/* Optional: Add "Today" or date heading here */}
-      {/* <h2 className="text-sm font-medium text-gray-500 mb-2">Today</h2> */}
-      
-      {entries.map((entry) => {
-        // REMOVED opacity calculation
-        
-        // Render MemoryCard directly
-        return (
-          <MemoryCard key={entry.id} entry={entry} />
-        );
-      })}
+  // Display error message if present
+  if (error) {
+    return (
+      <div className="p-6 text-center text-red-600">
+        <p>Error generating memories: {error}</p>
+      </div>
+    );
+  }
 
-      {/* Display processing error if entries were generated but there was still an error */}
-      {error && (
-        <p className="text-center text-sm text-red-600 mt-4 font-light">
-          Note: There was an error during processing: {error}
-        </p>
-      )}
+  // Display message if no entries exist (and no error)
+  if (!entries || entries.length === 0) {
+    return (
+      <div className="p-6 text-center text-gray-500">
+        <p>No memory entries found for today.</p>
+      </div>
+    );
+  }
+
+  // Render the timeline with the new MemoryCard component
+  return (
+    <div className="p-6 space-y-3 overflow-y-auto h-full">
+      {entries.map((entry, idx) => (
+        <MemoryCard key={idx} entry={entry} />
+      ))}
     </div>
   );
 } 
